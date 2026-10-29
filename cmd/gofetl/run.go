@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,15 +17,17 @@ import (
 
 func newRunCmd() *cobra.Command {
 	var (
-		input     string
-		output    string
-		format    string
-		batchSize int
-		renames   []string
+		input      string
+		output     string
+		format     string
+		batchSize  int
+		workers    int
+		sequential bool
+		renames    []string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Read, transform, and write records sequentially",
+		Short: "Read, transform, and write records",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			chain, err := chainFromRenames(renames)
@@ -43,7 +46,12 @@ func newRunCmd() *cobra.Command {
 			defer out.Close()
 
 			start := time.Now()
-			stats, err := pipeline.RunSequential(cmd.Context(), in, out, chain, batchSize)
+			stats, err := pipeline.Run(cmd.Context(), in, out, pipeline.Params{
+				Chain:      chain,
+				BatchSize:  batchSize,
+				Workers:    workers,
+				Sequential: sequential,
+			})
 			elapsed := time.Since(start)
 			if stats != nil {
 				printSummary(stats, elapsed)
@@ -54,7 +62,9 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&input, "input", "i", "", "input CSV or JSONL file, or - for stdin")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output JSONL file, or - for stdout")
 	cmd.Flags().StringVar(&format, "format", "", "input format: jsonl or csv (default: from extension)")
-	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "records per sink write")
+	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "lines per batch and sink write")
+	cmd.Flags().IntVar(&workers, "workers", runtime.NumCPU(), "worker goroutines")
+	cmd.Flags().BoolVar(&sequential, "sequential", false, "use the single-loop baseline instead of the worker pool")
 	cmd.Flags().StringArrayVar(&renames, "rename", nil, "rename a field, as old=new (repeatable)")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")

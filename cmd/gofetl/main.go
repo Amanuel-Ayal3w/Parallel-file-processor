@@ -21,7 +21,7 @@ func newRoot() *cobra.Command {
 		Short: "Stream a large CSV or JSONL file through a parallel transform pipeline",
 		Long: `gofetl reads a CSV or JSONL file, transforms each record, and writes the results.
 
-The sequential runner is the baseline. Later modes add a bounded worker pool.`,
+A fixed worker pool parses and transforms batches. Pass --sequential to use the single-loop baseline.`,
 		SilenceErrors: true,
 	}
 	root.AddCommand(newRunCmd(), newGenCmd())
