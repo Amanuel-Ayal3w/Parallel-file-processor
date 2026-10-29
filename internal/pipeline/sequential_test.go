@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"gofetl/internal/record"
@@ -15,17 +16,16 @@ import (
 )
 
 type memSink struct {
+	mu      sync.Mutex
 	batches [][]record.Record
-	delay   func()
 }
 
 func (m *memSink) Write(_ context.Context, recs []record.Record) error {
-	if m.delay != nil {
-		m.delay()
-	}
 	cp := make([]record.Record, len(recs))
 	copy(cp, recs)
+	m.mu.Lock()
 	m.batches = append(m.batches, cp)
+	m.mu.Unlock()
 	return nil
 }
 
@@ -33,6 +33,8 @@ func (m *memSink) Flush(context.Context) error { return nil }
 func (m *memSink) Close() error                { return nil }
 
 func (m *memSink) records() []record.Record {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var out []record.Record
 	for _, b := range m.batches {
 		out = append(out, b...)

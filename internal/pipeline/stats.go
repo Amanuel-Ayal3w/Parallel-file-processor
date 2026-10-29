@@ -11,6 +11,7 @@ type Stats struct {
 	BatchesRead    atomic.Int64
 	BatchesWritten atomic.Int64
 	MaxInFlight    atomic.Int64
+	MaxReorder     atomic.Int64
 }
 
 // ObserveInFlight records the high-water mark of batches sent but not yet written.
