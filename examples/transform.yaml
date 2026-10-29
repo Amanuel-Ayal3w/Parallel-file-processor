@@ -1,0 +1,19 @@
+transforms:
+  - type: filter
+    field: event
+    op: eq
+    value: click
+  - type: rename
+    from: user
+    to: user_id
+  - type: cast
+    field: value
+    to: float
+  - type: aggregate
+    group_by: event
+    metrics:
+      - type: count
+        as: n
+      - type: sum
+        field: value
+        as: total

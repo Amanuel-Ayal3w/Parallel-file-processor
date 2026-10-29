@@ -9,4 +9,4 @@ gofetl gen --lines 1000000 --output events.jsonl
 gofetl run --input events.jsonl --output out.jsonl --workers 8 --batch-size 1000 --queue-size 16 --rename user=user_id
 ```
 
-`go test -bench=. ./internal/bench` reports records/s for the sequential path.
+`gofetl run` reads `--transform config.yaml` for a chain of `filter`, `rename`, `cast`, and `aggregate` steps. Aggregate is last and runs in the writer. Output is a JSONL path, `sqlite://file.db`, or `postgres://...`. See [examples/transform.yaml](examples/transform.yaml) and [docker-compose.yml](docker-compose.yml).

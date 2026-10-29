@@ -12,6 +12,7 @@ type Transformer interface {
 // Chain applies steps in order. The zero value passes records through.
 type Chain struct {
 	steps []Transformer
+	agg   *Aggregator
 }
 
 // NewChain returns a chain of steps.
@@ -22,7 +23,7 @@ func NewChain(steps ...Transformer) Chain {
 // Steps returns the per-record steps.
 func (c Chain) Steps() []Transformer { return c.steps }
 
-// Apply runs every step. The first drop or error stops the chain.
+// Apply runs every per-record step. The first drop or error stops the chain.
 func (c Chain) Apply(rec record.Record) (record.Record, bool, error) {
 	cur := rec
 	for _, step := range c.steps {
@@ -33,4 +34,13 @@ func (c Chain) Apply(rec record.Record) (record.Record, bool, error) {
 		cur = next
 	}
 	return cur, true, nil
+}
+
+// Aggregator returns the optional group-by step, which the writer runs alone.
+func (c Chain) Aggregator() *Aggregator { return c.agg }
+
+// WithAggregator attaches a writer-side aggregator.
+func (c Chain) WithAggregator(a *Aggregator) Chain {
+	c.agg = a
+	return c
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gofetl/internal/sink"
+	"gofetl/internal/transform"
 )
 
 // reorderHeap is a min-heap of batch results ordered by sequence number.
@@ -33,7 +34,7 @@ func (h *reorderHeap) Pop() any {
 // slots is the in-flight window acquired by the reader; one token is released
 // per batch after it is written. The heap therefore never grows past the cap,
 // including when one sequence is much slower than the others.
-func writeOrdered(ctx context.Context, out sink.Sink, results <-chan batchResult, stats *Stats, delay time.Duration, slots chan struct{}, dlq *bufio.Writer) error {
+func writeOrdered(ctx context.Context, out sink.Sink, results <-chan batchResult, stats *Stats, delay time.Duration, slots chan struct{}, dlq *bufio.Writer, agg *transform.Aggregator) error {
 	var pending reorderHeap
 	next := 0
 	for res := range results {
@@ -43,7 +44,7 @@ func writeOrdered(ctx context.Context, out sink.Sink, results <-chan batchResult
 		}
 		for pending.Len() > 0 && pending[0].Seq == next {
 			item := heap.Pop(&pending).(batchResult)
-			if err := emitBatch(ctx, out, item, stats, delay, dlq); err != nil {
+			if err := emitBatch(ctx, out, item, stats, delay, dlq, agg); err != nil {
 				return err
 			}
 			next++
@@ -55,5 +56,5 @@ func writeOrdered(ctx context.Context, out sink.Sink, results <-chan batchResult
 	if pending.Len() > 0 {
 		return fmt.Errorf("ordered write ended while waiting for seq %d (%d batches buffered)", next, pending.Len())
 	}
-	return nil
+	return writeAggregate(ctx, out, agg, stats)
 }

@@ -124,10 +124,11 @@ func runParallel(ctx context.Context, in *source.Reader, out sink.Sink, p Params
 		return nil
 	})
 	g.Go(func() error {
+		agg := p.Chain.Aggregator()
 		if p.Ordered {
-			return writeOrdered(ctx, out, results, stats, p.SinkDelay, slots, dlq)
+			return writeOrdered(ctx, out, results, stats, p.SinkDelay, slots, dlq, agg)
 		}
-		return writeResults(ctx, out, results, stats, p.SinkDelay, dlq)
+		return writeResults(ctx, out, results, stats, p.SinkDelay, dlq, agg)
 	})
 
 	err := g.Wait()
@@ -231,16 +232,16 @@ func runWorker(ctx context.Context, format string, header []string, chain transf
 	return nil
 }
 
-func writeResults(ctx context.Context, out sink.Sink, results <-chan batchResult, stats *Stats, delay time.Duration, dlq *bufio.Writer) error {
+func writeResults(ctx context.Context, out sink.Sink, results <-chan batchResult, stats *Stats, delay time.Duration, dlq *bufio.Writer, agg *transform.Aggregator) error {
 	for res := range results {
-		if err := emitBatch(ctx, out, res, stats, delay, dlq); err != nil {
+		if err := emitBatch(ctx, out, res, stats, delay, dlq, agg); err != nil {
 			return err
 		}
 	}
-	return nil
+	return writeAggregate(ctx, out, agg, stats)
 }
 
-func emitBatch(ctx context.Context, out sink.Sink, res batchResult, stats *Stats, delay time.Duration, dlq *bufio.Writer) error {
+func emitBatch(ctx context.Context, out sink.Sink, res batchResult, stats *Stats, delay time.Duration, dlq *bufio.Writer, agg *transform.Aggregator) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -256,12 +257,33 @@ func emitBatch(ctx context.Context, out sink.Sink, res batchResult, stats *Stats
 	if err := writeDeadLetters(dlq, res.Bad); err != nil {
 		return err
 	}
-	if len(res.Records) > 0 {
+	if agg != nil {
+		for _, rec := range res.Records {
+			if err := agg.Add(rec); err != nil {
+				return err
+			}
+		}
+	} else if len(res.Records) > 0 {
 		if err := out.Write(ctx, res.Records); err != nil {
 			return err
 		}
 		stats.Written.Add(int64(len(res.Records)))
 	}
 	stats.BatchesWritten.Add(1)
+	return nil
+}
+
+func writeAggregate(ctx context.Context, out sink.Sink, agg *transform.Aggregator, stats *Stats) error {
+	if agg == nil {
+		return nil
+	}
+	rows := agg.Rows()
+	if len(rows) == 0 {
+		return nil
+	}
+	if err := out.Write(ctx, rows); err != nil {
+		return err
+	}
+	stats.Written.Add(int64(len(rows)))
 	return nil
 }

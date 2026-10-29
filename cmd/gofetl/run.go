@@ -21,19 +21,20 @@ import (
 
 func newRunCmd() *cobra.Command {
 	var (
-		input      string
-		output     string
-		format     string
-		batchSize  int
-		workers    int
-		queueSize  int
-		reorderCap int
-		sinkDelay  time.Duration
-		sequential bool
-		ordered    bool
-		onError    string
-		dlqPath    string
-		renames    []string
+		input         string
+		output        string
+		format        string
+		batchSize     int
+		workers       int
+		queueSize     int
+		reorderCap    int
+		sinkDelay     time.Duration
+		sequential    bool
+		ordered       bool
+		onError       string
+		dlqPath       string
+		transformPath string
+		renames       []string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -41,38 +42,15 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			chain, err := chainFromRenames(renames)
-			if err != nil {
-				return err
-			}
-			in, err := source.Open(input, format)
-			if err != nil {
-				return err
-			}
-			defer in.Close()
-			out, err := sink.OpenJSONL(output)
-			if err != nil {
-				return err
-			}
-			defer out.Close()
-
-			var dlq io.WriteCloser
-			if onError == pipeline.OnErrorDLQ {
-				path := dlqPath
-				if path == "" {
-					if input == "-" {
-						path = "gofetl.dlq.jsonl"
-					} else {
-						path = input + ".dlq.jsonl"
-					}
+			if transformPath != "" {
+				if len(renames) > 0 {
+					return fmt.Errorf("pass either --transform or --rename")
 				}
-				f, err := os.Create(path)
-				if err != nil {
-					return err
-				}
-				dlq = f
-				defer f.Close()
+				chain, err = transform.Load(transformPath)
 			}
-
+			if err != nil {
+				return err
+			}
 			runCtx, cancelRun := context.WithCancel(cmd.Context())
 			stop := make(chan struct{})
 			sigCh := make(chan os.Signal, 2)
@@ -100,6 +78,35 @@ func newRunCmd() *cobra.Command {
 				<-sigDone
 			}()
 
+			in, err := source.Open(input, format)
+			if err != nil {
+				return err
+			}
+			defer in.Close()
+			out, err := sink.Open(runCtx, output)
+			if err != nil {
+				return err
+			}
+			defer out.Close()
+
+			var dlq io.WriteCloser
+			if onError == pipeline.OnErrorDLQ {
+				path := dlqPath
+				if path == "" {
+					if input == "-" {
+						path = "gofetl.dlq.jsonl"
+					} else {
+						path = input + ".dlq.jsonl"
+					}
+				}
+				f, err := os.Create(path)
+				if err != nil {
+					return err
+				}
+				dlq = f
+				defer f.Close()
+			}
+
 			start := time.Now()
 			stats, err := pipeline.Run(runCtx, in, out, pipeline.Params{
 				Chain:      chain,
@@ -122,8 +129,9 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&input, "input", "i", "", "input CSV or JSONL file, or - for stdin")
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output JSONL file, or - for stdout")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output: JSONL path, file://, sqlite://, or postgres://")
 	cmd.Flags().StringVar(&format, "format", "", "input format: jsonl or csv (default: from extension)")
+	cmd.Flags().StringVar(&transformPath, "transform", "", "YAML file of filter, rename, cast, and aggregate steps")
 	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "lines per batch and sink write")
 	cmd.Flags().IntVar(&workers, "workers", runtime.NumCPU(), "worker goroutines")
 	cmd.Flags().IntVar(&queueSize, "queue-size", 0, "capacity of the batch and result queues (default 2*workers)")

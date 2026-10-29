@@ -37,6 +37,11 @@ func runSequential(ctx context.Context, in *source.Reader, out sink.Sink, p Para
 		dlq = bufio.NewWriterSize(p.DLQ, 64*1024)
 	}
 	defer func() {
+		if err == nil {
+			if ferr := writeAggregate(ctx, out, p.Chain.Aggregator(), stats); err == nil {
+				err = ferr
+			}
+		}
 		if dlq != nil {
 			if ferr := dlq.Flush(); err == nil {
 				err = ferr
@@ -54,6 +59,15 @@ func runSequential(ctx context.Context, in *source.Reader, out sink.Sink, p Para
 			return werr
 		}
 		bad = bad[:0]
+		if agg := p.Chain.Aggregator(); agg != nil {
+			for _, rec := range batch {
+				if aerr := agg.Add(rec); aerr != nil {
+					return aerr
+				}
+			}
+			batch = batch[:0]
+			return nil
+		}
 		if len(batch) == 0 {
 			return nil
 		}
