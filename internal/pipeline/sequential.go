@@ -36,6 +36,8 @@ func runSequential(ctx context.Context, in *source.Reader, out sink.Sink, p Para
 	if p.DLQ != nil {
 		dlq = bufio.NewWriterSize(p.DLQ, 64*1024)
 	}
+	stopMon := monitor(p, stats, func() (int, int) { return 0, 0 })
+	defer stopMon()
 	defer func() {
 		if err == nil {
 			if ferr := writeAggregate(ctx, out, p.Chain.Aggregator(), stats); err == nil {

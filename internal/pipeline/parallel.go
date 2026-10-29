@@ -43,6 +43,8 @@ type Params struct {
 	DLQ io.Writer
 	// Stop, when closed, tells the reader to stop and drain work already queued.
 	Stop <-chan struct{}
+	// Progress prints one-second counters to stderr.
+	Progress bool
 	// Stats, when set, receives counters. Otherwise Run allocates one.
 	Stats *Stats
 }
@@ -130,6 +132,9 @@ func runParallel(ctx context.Context, in *source.Reader, out sink.Sink, p Params
 		}
 		return writeResults(ctx, out, results, stats, p.SinkDelay, dlq, agg)
 	})
+
+	stopMon := monitor(p, stats, func() (int, int) { return len(batches), len(results) })
+	defer stopMon()
 
 	err := g.Wait()
 	if dlq != nil {

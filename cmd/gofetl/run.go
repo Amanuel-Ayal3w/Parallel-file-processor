@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +36,9 @@ func newRunCmd() *cobra.Command {
 		onError       string
 		dlqPath       string
 		transformPath string
+		pprofDir      string
+		progress      bool
+		quiet         bool
 		renames       []string
 	)
 	cmd := &cobra.Command{
@@ -51,6 +56,35 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if quiet {
+				progress = false
+			}
+			if pprofDir != "" {
+				if err := os.MkdirAll(pprofDir, 0o755); err != nil {
+					return err
+				}
+				cpu, err := os.Create(filepath.Join(pprofDir, "cpu.pprof"))
+				if err != nil {
+					return err
+				}
+				defer cpu.Close()
+				if err := pprof.StartCPUProfile(cpu); err != nil {
+					return err
+				}
+				defer pprof.StopCPUProfile()
+				defer func() {
+					heap, err := os.Create(filepath.Join(pprofDir, "heap.pprof"))
+					if err != nil {
+						fmt.Fprintln(os.Stderr, "gofetl: heap profile:", err)
+						return
+					}
+					defer heap.Close()
+					if err := pprof.WriteHeapProfile(heap); err != nil {
+						fmt.Fprintln(os.Stderr, "gofetl: heap profile:", err)
+					}
+				}()
+			}
+
 			runCtx, cancelRun := context.WithCancel(cmd.Context())
 			stop := make(chan struct{})
 			sigCh := make(chan os.Signal, 2)
@@ -120,6 +154,7 @@ func newRunCmd() *cobra.Command {
 				OnError:    onError,
 				DLQ:        dlq,
 				Stop:       stop,
+				Progress:   progress,
 			})
 			elapsed := time.Since(start)
 			if stats != nil {
@@ -141,6 +176,9 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().IntVar(&reorderCap, "reorder-cap", 0, "max batches in flight when --ordered (default queue-size+workers)")
 	cmd.Flags().StringVar(&onError, "on-error", pipeline.OnErrorFail, "what to do with a bad record: fail, skip, or dlq")
 	cmd.Flags().StringVar(&dlqPath, "dlq-file", "", "dead-letter JSONL path used when --on-error=dlq")
+	cmd.Flags().BoolVar(&progress, "progress", true, "print read, write, error, and queue counters once a second")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "disable the progress line")
+	cmd.Flags().StringVar(&pprofDir, "pprof", "", "write cpu.pprof and heap.pprof into this directory")
 	cmd.Flags().StringArrayVar(&renames, "rename", nil, "rename a field, as old=new (repeatable)")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")
