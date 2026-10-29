@@ -2,7 +2,7 @@
 
 `gofetl` streams a large CSV or JSONL file, transforms each record, and writes JSONL.
 
-A single reader goroutine hands batches to a fixed worker pool over a bounded queue (default `2 * workers`). One writer drains results as they finish, so output is unordered. A slow sink fills those queues and the reader blocks instead of buffering the file. `--sequential` keeps the single-loop baseline.
+A single reader goroutine hands batches to a fixed worker pool over a bounded queue (default `2 * workers`). One writer drains results. By default it writes them as they finish. `--ordered` restores input order with a sequence-number heap, and `--reorder-cap` limits how far later batches may run ahead of a slow one. `--on-error` is `fail` (default), `skip`, or `dlq`. Ctrl+C stops reading, drains in-flight batches, and flushes the sink. `--sequential` keeps the single-loop baseline.
 
 ```bash
 gofetl gen --lines 1000000 --output events.jsonl

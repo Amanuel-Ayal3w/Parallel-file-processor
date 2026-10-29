@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -23,8 +27,12 @@ func newRunCmd() *cobra.Command {
 		batchSize  int
 		workers    int
 		queueSize  int
+		reorderCap int
 		sinkDelay  time.Duration
 		sequential bool
+		ordered    bool
+		onError    string
+		dlqPath    string
 		renames    []string
 	)
 	cmd := &cobra.Command{
@@ -47,14 +55,64 @@ func newRunCmd() *cobra.Command {
 			}
 			defer out.Close()
 
+			var dlq io.WriteCloser
+			if onError == pipeline.OnErrorDLQ {
+				path := dlqPath
+				if path == "" {
+					if input == "-" {
+						path = "gofetl.dlq.jsonl"
+					} else {
+						path = input + ".dlq.jsonl"
+					}
+				}
+				f, err := os.Create(path)
+				if err != nil {
+					return err
+				}
+				dlq = f
+				defer f.Close()
+			}
+
+			runCtx, cancelRun := context.WithCancel(cmd.Context())
+			stop := make(chan struct{})
+			sigCh := make(chan os.Signal, 2)
+			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(sigCh)
+			sigDone := make(chan struct{})
+			go func() {
+				defer close(sigDone)
+				select {
+				case <-sigCh:
+					fmt.Fprintln(os.Stderr, "gofetl: interrupt, draining in-flight work")
+					close(stop)
+				case <-runCtx.Done():
+					return
+				}
+				select {
+				case <-sigCh:
+					fmt.Fprintln(os.Stderr, "gofetl: interrupt, canceling")
+					cancelRun()
+				case <-runCtx.Done():
+				}
+			}()
+			defer func() {
+				cancelRun()
+				<-sigDone
+			}()
+
 			start := time.Now()
-			stats, err := pipeline.Run(cmd.Context(), in, out, pipeline.Params{
+			stats, err := pipeline.Run(runCtx, in, out, pipeline.Params{
 				Chain:      chain,
 				BatchSize:  batchSize,
 				Workers:    workers,
 				QueueSize:  queueSize,
 				Sequential: sequential,
 				SinkDelay:  sinkDelay,
+				Ordered:    ordered,
+				ReorderCap: reorderCap,
+				OnError:    onError,
+				DLQ:        dlq,
+				Stop:       stop,
 			})
 			elapsed := time.Since(start)
 			if stats != nil {
@@ -71,6 +129,10 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().IntVar(&queueSize, "queue-size", 0, "capacity of the batch and result queues (default 2*workers)")
 	cmd.Flags().DurationVar(&sinkDelay, "sink-delay", 0, "debug delay before each sink write, to surface backpressure")
 	cmd.Flags().BoolVar(&sequential, "sequential", false, "use the single-loop baseline instead of the worker pool")
+	cmd.Flags().BoolVar(&ordered, "ordered", false, "write batches in input order")
+	cmd.Flags().IntVar(&reorderCap, "reorder-cap", 0, "max batches in flight when --ordered (default queue-size+workers)")
+	cmd.Flags().StringVar(&onError, "on-error", pipeline.OnErrorFail, "what to do with a bad record: fail, skip, or dlq")
+	cmd.Flags().StringVar(&dlqPath, "dlq-file", "", "dead-letter JSONL path used when --on-error=dlq")
 	cmd.Flags().StringArrayVar(&renames, "rename", nil, "rename a field, as old=new (repeatable)")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")
