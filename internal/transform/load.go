@@ -68,7 +68,7 @@ func build(steps []stepConfig) (Chain, error) {
 			}
 			metrics := make([]Metric, len(step.Metrics))
 			for j, m := range step.Metrics {
-				metrics[j] = Metric{Type: m.Type, Field: m.Field, As: m.As}
+				metrics[j] = Metric(m)
 			}
 			var err error
 			agg, err = NewAggregator(step.GroupBy, metrics...)
