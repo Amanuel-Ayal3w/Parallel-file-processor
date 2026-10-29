@@ -5,6 +5,7 @@ import (
 	"io"
 	"runtime"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -19,8 +20,13 @@ type Params struct {
 	Chain      transform.Chain
 	BatchSize  int
 	Workers    int
-	QueueSize  int
+	QueueSize  int // channel capacity for batches and results; 0 means 2*workers
 	Sequential bool
+	// SinkDelay sleeps in the writer before each batch write. It is a debug knob
+	// for watching backpressure: a slow sink fills the queues and blocks the reader.
+	SinkDelay time.Duration
+	// Stats, when set, receives counters. Otherwise Run allocates one.
+	Stats *Stats
 }
 
 // batchResult is one worker's output for a single batch.
@@ -50,14 +56,18 @@ func runParallel(ctx context.Context, in *source.Reader, out sink.Sink, p Params
 		p.QueueSize = 2 * p.Workers
 	}
 
-	stats := &Stats{}
+	stats := p.Stats
+	if stats == nil {
+		stats = &Stats{}
+	}
 	g, ctx := errgroup.WithContext(ctx)
+	// Both queues are bounded so a slow writer stops the reader instead of buffering the file.
 	batches := make(chan record.Batch, p.QueueSize)
 	results := make(chan batchResult, p.QueueSize)
 
 	g.Go(func() error {
 		defer close(batches)
-		return readBatches(ctx, in, batches, p.BatchSize)
+		return readBatches(ctx, in, batches, p.BatchSize, stats)
 	})
 
 	var wg sync.WaitGroup
@@ -74,7 +84,7 @@ func runParallel(ctx context.Context, in *source.Reader, out sink.Sink, p Params
 		return nil
 	})
 	g.Go(func() error {
-		return writeResults(ctx, out, results, stats)
+		return writeResults(ctx, out, results, stats, p.SinkDelay)
 	})
 
 	err := g.Wait()
@@ -84,7 +94,7 @@ func runParallel(ctx context.Context, in *source.Reader, out sink.Sink, p Params
 	return stats, err
 }
 
-func readBatches(ctx context.Context, in *source.Reader, out chan<- record.Batch, batchSize int) error {
+func readBatches(ctx context.Context, in *source.Reader, out chan<- record.Batch, batchSize int, stats *Stats) error {
 	seq := 0
 	batch := record.Batch{}
 	send := func() error {
@@ -97,6 +107,8 @@ func readBatches(ctx context.Context, in *source.Reader, out chan<- record.Batch
 			return ctx.Err()
 		case out <- batch:
 		}
+		stats.BatchesRead.Add(1)
+		stats.ObserveInFlight()
 		seq++
 		batch = record.Batch{}
 		return nil
@@ -147,18 +159,27 @@ func runWorker(ctx context.Context, format string, header []string, chain transf
 	return nil
 }
 
-func writeResults(ctx context.Context, out sink.Sink, results <-chan batchResult, stats *Stats) error {
+func writeResults(ctx context.Context, out sink.Sink, results <-chan batchResult, stats *Stats, delay time.Duration) error {
 	for res := range results {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if len(res.Records) == 0 {
-			continue
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
-		if err := out.Write(ctx, res.Records); err != nil {
-			return err
+		if len(res.Records) > 0 {
+			if err := out.Write(ctx, res.Records); err != nil {
+				return err
+			}
+			stats.Written.Add(int64(len(res.Records)))
 		}
-		stats.Written.Add(int64(len(res.Records)))
+		stats.BatchesWritten.Add(1)
 	}
 	return nil
 }

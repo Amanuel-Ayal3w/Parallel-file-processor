@@ -22,6 +22,8 @@ func newRunCmd() *cobra.Command {
 		format     string
 		batchSize  int
 		workers    int
+		queueSize  int
+		sinkDelay  time.Duration
 		sequential bool
 		renames    []string
 	)
@@ -50,7 +52,9 @@ func newRunCmd() *cobra.Command {
 				Chain:      chain,
 				BatchSize:  batchSize,
 				Workers:    workers,
+				QueueSize:  queueSize,
 				Sequential: sequential,
+				SinkDelay:  sinkDelay,
 			})
 			elapsed := time.Since(start)
 			if stats != nil {
@@ -64,6 +68,8 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "", "input format: jsonl or csv (default: from extension)")
 	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "lines per batch and sink write")
 	cmd.Flags().IntVar(&workers, "workers", runtime.NumCPU(), "worker goroutines")
+	cmd.Flags().IntVar(&queueSize, "queue-size", 0, "capacity of the batch and result queues (default 2*workers)")
+	cmd.Flags().DurationVar(&sinkDelay, "sink-delay", 0, "debug delay before each sink write, to surface backpressure")
 	cmd.Flags().BoolVar(&sequential, "sequential", false, "use the single-loop baseline instead of the worker pool")
 	cmd.Flags().StringArrayVar(&renames, "rename", nil, "rename a field, as old=new (repeatable)")
 	_ = cmd.MarkFlagRequired("input")
